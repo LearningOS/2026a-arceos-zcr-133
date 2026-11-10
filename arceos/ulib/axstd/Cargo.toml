@@ -80,3 +80,6 @@ arceos_api = { workspace = true }
 axio = "0.1"
 axerrno = "0.1"
 kspin = "0.1"
+# `alloc::collections` 里没有 HashMap，hash-based 容器由 hashbrown 提供。
+# 关掉默认 feature 只为避开 allocator-api2，`default-hasher` 是 `HashMap::new()` 需要的。
+hashbrown = { version = "0.15", default-features = false, features = ["default-hasher"] }
