@@ -15,6 +15,7 @@ pub struct DirNode {
     this: Weak<DirNode>,
     parent: RwLock<Weak<dyn VfsNodeOps>>,
     children: RwLock<BTreeMap<String, VfsNodeRef>>,
+    mount_path: RwLock<String>,
 }
 
 impl DirNode {
@@ -23,7 +24,24 @@ impl DirNode {
             this: this.clone(),
             parent: RwLock::new(parent.unwrap_or_else(|| Weak::<Self>::new())),
             children: RwLock::new(BTreeMap::new()),
+            mount_path: RwLock::new(String::new()),
         })
+    }
+
+    pub(super) fn set_mount_path(&self, path: &str) {
+        *self.mount_path.write() = path.trim_end_matches('/').into();
+    }
+
+    // 去掉挂载点前缀，统一成相对本目录的路径
+    fn strip_mount(&self, path: &str) -> String {
+        let path = path.trim_end_matches('/');
+        let mount = self.mount_path.read();
+        let rest = if mount.is_empty() {
+            path
+        } else {
+            path.strip_prefix(mount.as_str()).unwrap_or(path)
+        };
+        rest.trim_start_matches('/').into()
     }
 
     pub(super) fn set_parent(&self, parent: Option<&VfsNodeRef>) {
@@ -165,7 +183,32 @@ impl VfsNodeOps for DirNode {
         }
     }
 
+    // 只支持同一目录内改名，不支持跨目录移动
+    fn rename(&self, src_path: &str, dst_path: &str) -> VfsResult {
+        let src = self.strip_mount(src_path);
+        let dst = self.strip_mount(dst_path);
+        let (src_name, dst_name) = (last_name(&src), last_name(&dst));
+        if src_name.is_empty() || dst_name.is_empty() || parent_of(&src) != parent_of(&dst) {
+            return Err(VfsError::Unsupported);
+        }
+        let mut children = self.children.write();
+        if children.contains_key(dst_name) {
+            return Err(VfsError::AlreadyExists);
+        }
+        let node = children.remove(src_name).ok_or(VfsError::NotFound)?;
+        children.insert(dst_name.into(), node);
+        Ok(())
+    }
+
     axfs_vfs::impl_vfs_dir_default! {}
+}
+
+fn last_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn parent_of(path: &str) -> &str {
+    path.rfind('/').map_or("", |i| &path[..i])
 }
 
 fn split_path(path: &str) -> (&str, Option<&str>) {
